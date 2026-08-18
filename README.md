@@ -34,35 +34,49 @@ The success rate isn't a typo. Phase 2 fails entirely — and the benchmark reve
 ## Architecture Overview
 
 ### Phase 1: Baseline
+
 Pure database I/O. The control group that establishes the ceiling.
 
-```
-Client → HTTP Handler → PostgreSQL → Response
+```mermaid
+flowchart LR
+    subgraph Phase1["Phase 1 — Baseline"]
+        C1[Client] --> H1[HTTP Handler]
+        H1 --> P1[(PostgreSQL)]
+        H1 --> R1[Response]
+    end
 ```
 
 ### Phase 2: Synchronous Side-Effects
+
 The naive approach. Email, SMS, and audit logging happen inline before responding.
 
-```
-Client → HTTP Handler → PostgreSQL 
-         ↓
-         ├→ Sleep 100ms (simulated email)
-         ├→ Sleep 150ms (simulated SMS)  
-         ├→ Write audit_logs (synchronously)
-         └→ Response
+```mermaid
+flowchart LR
+    subgraph Phase2["Phase 2 — Synchronous side-effects"]
+        C2[Client] --> H2[HTTP Handler]
+        H2 --> P2[(PostgreSQL)]
+        H2 --> E2["Sleep ~100ms<br/>simulated email"]
+        E2 --> S2["Sleep ~150ms<br/>simulated SMS"]
+        S2 --> A2["Write audit_logs<br/>synchronously"]
+        A2 --> R2[Response]
+    end
 ```
 
 ### Phase 3: Async via Redis Queue
+
 The fix. Side-effects decouple from the request path; a separate worker service processes them.
 
-```
-Client → HTTP Handler → PostgreSQL → LPUSH 3 jobs → Response (immediate)
-                                          ↓
-                                     Redis Queue
-                                          ↓
-                                  Async Worker Pool
-                                          ↓
-                                    ClickHouse (audit sink)
+```mermaid
+flowchart LR
+    subgraph Phase3["Phase 3 — Async via Redis queue"]
+        C3[Client] --> H3[HTTP Handler]
+        H3 --> P3[(PostgreSQL)]
+        H3 --> Q3["LPUSH 3 jobs<br/>email / sms / audit_log"]
+        Q3 --> R3["Response — immediate"]
+        Q3 -.-> RD[("Redis list<br/>background_jobs")]
+        RD -.-> W3["async-worker<br/>BRPOP + pool of 10"]
+        W3 --> CH[(ClickHouse<br/>audit_logs)]
+    end
 ```
 
 The critical difference: in Phase 2, the client waits for systems it never asked about (SMTP, SMS gateway, audit database). In Phase 3, the response arrives the moment the booking is durable. Everything else happens independently after.
